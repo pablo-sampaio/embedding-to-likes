@@ -33,15 +33,17 @@ Estes arquivos definem as funções usadas nos notebooks explicados acima.
 
 ## Notebook `1.1-Preprocessamento_A.ipynb`
 
-- **Concatenação**: Dados de Bolsonaro e Lula são unidos.
+Será um único de arquivo de pré-processamento.
+
+FAZER:
 
 - **Limpeza**: Colunas irrelevantes são removidas e linhas com valores ausentes são excluídas.
 
-- **Cálculo de Novas Variáveis**
-   - *Dias Decorridos*: Número de dias entre a data de coleta e a data do post.
-   - *Candidato*: Identifica o candidato.
+- **Cálculo de Embeddings** com diferentes modelos
 
-## Notebook `1.2-Preprocessamento_B.ipynb`
+- Saída: vários pares de arquivos (1 de cada candidato), sendo um par gerado por cada um dos modelos de embeddings
+
+## Notebook `1.2-Preprocessamento_B.ipynb` (REMOVER)
 
 - **Análises de correlação**: Matriz de correlação entre curtidas, plays, comentários, e compartilhamentos, incluindo a versão logarítmica.
 
