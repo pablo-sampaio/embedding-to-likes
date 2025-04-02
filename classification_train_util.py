@@ -4,13 +4,129 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
-from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.model_selection import GridSearchCV, StratifiedKFold, RepeatedStratifiedKFold
 from sklearn import metrics
 
 from sklearn.base import clone
 
 
-def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_folds_inner=5, rand_state=42):
+class ModelResultsCV:
+    def __init__(self, cv_object, include_roc_curve=True, include_pr_curve=False):
+        self.cv = cv_object
+
+        self.include_roc_curve = include_roc_curve
+        self.include_pr_curve = include_pr_curve
+
+        self.best_params = []
+        self.best_models = []
+        self.training_times = []
+
+        self.accuracy_list = []
+        self.precision_list = []
+        self.recall_list = []
+        self.f1_score_list = []
+        self.auc_roc_score_list = []
+        self.auc_pr_score_list = []
+
+        self.roc_curves = []  # pairs (list of FPRs, list of TPRs) per fold
+        self.pr_curves  = []  # pairs (list of recalls, list of precisions) per fold
+        
+        self.num_fold = 0
+
+    def _check_consistency(self):
+        assert len(self.accuracy_list) == self.num_fold+1
+        # TODO: fazer o mesmo com as outras listas...
+
+    def record_fold_best_model_evaluation(self, best_model, best_params, X_test, y_test, training_time):
+        '''
+        Receive a trained binary classification model, then calculates and stores metrics.
+        '''
+        self.best_params.append(best_params)
+        self.best_models.append(best_model)
+        self.training_times.append(training_time)
+        
+        y_pred = best_model.predict(X_test)
+
+        accuracy = metrics.accuracy_score(y_test, y_pred)
+        precision = metrics.precision_score(y_test, y_pred)
+        recall = metrics.recall_score(y_test, y_pred)
+        f1 = metrics.f1_score(y_test, y_pred)
+
+        # Armazenando métricas deste fold
+        self.accuracy_list.append(accuracy)
+        self.precision_list.append(precision)
+        self.recall_list.append(recall)
+        self.f1_score_list.append(f1)
+
+        model_predicts_probability = hasattr(best_model, "predict_proba")
+        
+        if model_predicts_probability:
+            # Probabilidades da classe positiva
+            y_pred_proba = best_model.predict_proba(X_test)[:, 1]  
+            
+            # Calcula auc-ROC (area under the curve, for ROC curve)
+            aucroc_score = metrics.roc_auc_score(y_test, y_pred_proba)
+            self.auc_roc_score_list.append(aucroc_score)
+
+            # Calcula auc-PR (area under the curve, for PR curve)
+            # https://datascience.stackexchange.com/questions/9003/when-do-i-have-to-use-aucpr-instead-of-auroc-and-vice-versa
+            aucpr_score = metrics.average_precision_score(y_test, y_pred_proba) 
+            self.auc_pr_score_list.append(aucpr_score)
+        else:
+            print(f"Warning: Modelo não permite calcular curvas ROC ou PR.")
+            self.auc_roc_score_list.append(0)
+            self.auc_pr_score_list.append(0)
+
+        if self.include_roc_curve and model_predicts_probability:
+            # Valores usados para plotar a curva ROC
+            fpr, tpr, thresholds = metrics.roc_curve(y_test, y_pred_proba)  # Calcula FPR (false positive rate) e TPR (true positive rate)
+            self.roc_curves.append((fpr, tpr))
+        else:
+            self.roc_curves.append(None)
+
+        if self.include_pr_curve and model_predicts_probability:
+            # Valores usados para plotar para a curva PR
+            precisions, recalls, thresholds = metrics.precision_recall_curve(y_test, y_pred_proba)  # Calcula Precision e Recall
+            self.pr_curves.append((recalls, precisions))
+        else:          
+            self.pr_curves.append(None)
+        
+        self._check_consistency()
+        self.num_fold += 1
+
+    def to_dict(self):
+        auc_mean = np.mean(self.auc_score_list)
+        auc_std = np.std(self.auc_score_list)
+        aucpr_mean = np.mean(self.aucpr_score_list)
+        aucpr_std = np.std(self.aucpr_score_list)
+
+        result = {
+            "cv_model": self.cv_object,
+
+            "accuracy_mean": np.mean(self.accuracy_list),
+            "accuracy_std": np.std(self.accuracy_list),
+            "precision_mean": np.mean(self.precision_list),
+            "precision_std": np.std(self.precision_list),
+            "recall_mean": np.mean(self.recall_list),
+            "recall_std": np.std(self.recall_list),
+            "f1_score_mean": np.mean(self.f1_score_list),
+            "f1_score_std": np.std(self.f1_score_list),
+            "f1_score_list": self.f1_score_list,
+            "aucROC_mean": auc_mean,
+            "aucROC_std": auc_std,
+            "aucPR_mean": aucpr_mean,
+            "aucPR_std": aucpr_std,
+
+            "roc_curve_list": self.roc_curves,
+            "pr_curve_list": self.pr_curves,
+            
+            "average_training_time": np.mean(self.training_time),
+            "best_parameters": self.best_model_params,
+        }
+        return result
+
+
+def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_folds_inner=5, repetitions=1, rand_state=42):
     """
     Esta função treina vários modelos e avalia seu desempenho usando métricas como acurácia, 
     precisão, revocação e F1-score.
@@ -64,7 +180,8 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_
         print(f"Treinando modelo {nome_do_modelo} ", end="")
 
         # Configurando a validação cruzada externa
-        cv_outer = StratifiedKFold(n_splits=k_folds_outer, shuffle=True, random_state=rand_state)
+        #cv_outer = StratifiedKFold(n_splits=k_folds_outer, shuffle=True, random_state=rand_state)
+        cv_outer = RepeatedStratifiedKFold(n_repeats=repetitions, n_splits=k_folds_outer, random_state=rand_state)
 
         # Executando a validação cruzada
         tempos_de_treinamento = []
@@ -82,64 +199,70 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_
             # Roda grid search, capturando tempo de treinamento
             grid_search = GridSearchCV(estimador_base, parametros, 
                                        scoring='f1', 
-                                       cv=StratifiedKFold(n_splits=k_folds_inner, shuffle=True, random_state=17),
-                                       n_jobs=4)
+                                       cv=StratifiedKFold(n_splits=k_folds_inner, shuffle=True),
+                                       n_jobs=1)
             
+            # Inicio do treinamento
             tempo_treinamento = time.time()
+            
+            # Treinamento 1 (múltiplos) - grid search
             modelo_treinado = grid_search.fit(X_train, y_train)
-            tempo_treinamento = time.time() - tempo_treinamento
-
-            tempos_de_treinamento.append(tempo_treinamento)
 
             modelo_treinado = clone(grid_search.best_estimator_)
             modelo_treinado.set_params(**grid_search.best_params_)  # só por garantia...
 
-            best_model_params.append(grid_search.best_params_)
-
             if nome_do_modelo == 'Support Vector Machine':
                 modelo_treinado.set_params(predictor__probability=True)  # não é setado antes, porque deixa o treinamento lento
             
-            # IDEIA (será válida?): retreinar com todos os dados, de treinamento-validação            
+            # Treinamento 2 - retreina com todos os dados de treinamento-validação            
             modelo_treinado = modelo_treinado.fit(X_train, y_train)
-            
+
+            # Fim do treinamento
+            tempo_treinamento = time.time() - tempo_treinamento
+
+            tempos_de_treinamento.append(tempo_treinamento)
+
+            best_model_params.append(grid_search.best_params_)            
             best_trained_models.append(modelo_treinado)
 
-            # Avaliação do modelo (com os melhores parâmetros encontrados) no conjunto de teste
+            # Avaliação do modelo (com os melhores parâmetros encontrados) no conjunto de teste (separado no fold externo)
             y_pred = modelo_treinado.predict(X_test)
             accuracy = metrics.accuracy_score(y_test, y_pred)
-            precisions = metrics.precision_score(y_test, y_pred)
-            recalls = metrics.recall_score(y_test, y_pred)
+            precision = metrics.precision_score(y_test, y_pred)
+            recall = metrics.recall_score(y_test, y_pred)
             f1 = metrics.f1_score(y_test, y_pred)
 
             # Armazenando métricas deste fold
             accuracy_list.append(accuracy)
-            precision_list.append(precisions)
-            recall_list.append(recalls)
+            precision_list.append(precision)
+            recall_list.append(recall)
             f1_score_list.append(f1)
             
             if hasattr(modelo_treinado, "predict_proba"):
-                y_pred_proba = modelo_treinado.predict_proba(X_test)[:, 1]  # Probabilidades da classe positiva
+                # Probabilidades da classe positiva
+                y_pred_proba = modelo_treinado.predict_proba(X_test)[:, 1]  
                 
-                # Calcula auc-ROC
+                # Calcula auc-ROC (area under the curve, for ROC curve)
                 auc_score = metrics.roc_auc_score(y_test, y_pred_proba)
                 auc_score_list.append(auc_score)
 
-                # Valores para a curva ROC
+                # Valores usados para plotar a curva ROC
                 fpr, tpr, thresholds = metrics.roc_curve(y_test, y_pred_proba)  # Calcula FPR (false positive rate) e TPR (true positive rate)
                 roc_fpr_list.append(fpr)
                 roc_tpr_list.append(tpr)
 
-                # Calcula auc-PR
+                # Calcula auc-PR (area under the curve, for PR curve)
                 # https://datascience.stackexchange.com/questions/9003/when-do-i-have-to-use-aucpr-instead-of-auroc-and-vice-versa
-                aucpr_score = metrics.average_precision_score(y_test, y_pred_proba)  # Calcula AUC-PR
+                aucpr_score = metrics.average_precision_score(y_test, y_pred_proba) 
                 aucpr_score_list.append(aucpr_score)
 
-                # Valores para a curva PR
+                # Valores usados para plotar para a curva PR
                 precisions, recalls, thresholds = metrics.precision_recall_curve(y_test, y_pred_proba)  # Calcula Precision e Recall
                 pr_precision_list.append(precisions)
                 pr_recall_list.append(recalls)
             else:
-                print('x', end='')
+                #print('x', end='')
+                print(f"Modelo {nome_do_modelo} não permite calcular curva.")
                 auc_score_list.append(0)
                 aucpr_score_list.append(0)
                 pr_precision_list.append([])
@@ -194,7 +317,7 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_
 
     print("Terminado em", time.strftime('%d/%m/%Y %H:%M:%S', time.localtime()))
 
-    # Tentar fazer em função à parte, com os dados salvos nos resultados
+    # Tentar passar para uma função à parte, com os dados salvos nos resultados
     # Depois de treinar todos os modelos:
 
     # Plota a curva ROC geral
@@ -213,7 +336,8 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_
     # Plota a curva PR geral - não sei se está correta
     # ver https://scikit-learn.org/stable/auto_examples/model_selection/plot_precision_recall.html
     # Ideia: plotar a média das curvas PR
-    '''plt.figure(figsize=(10, 8))
+    #'''
+    plt.figure(figsize=(10, 8))
     for precisions, recalls, mdl in zip(pr_precision_list, pr_recall_list, lista_modelos):
         plt.plot(recalls, precisions, label='%s PR' % mdl["nome_do_modelo"])
     plt.xlim([0.0, 1.0])
@@ -222,6 +346,10 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, k_folds_outer=5, k_
     plt.ylabel('Precision')
     plt.title('CURVA PR')
     plt.legend(loc='lower right', bbox_to_anchor=(1.5, 0))  # Posiciona a legenda
-    plt.show()'''
+    plt.show()
+    #'''
 
     return resultados_gerais
+
+
+
