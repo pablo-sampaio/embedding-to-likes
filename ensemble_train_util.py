@@ -34,10 +34,24 @@ class MyVotingClassifier(BaseEstimator):
         return pred_proba
     
 
-def select_best_models_per_fold(results):
+def extract_best_models_of_fold(results, fold):
     '''
-    Seleciona a melhor modelo (de qualquer tipo) com seus parâmetros, para cada fold externo
-    (Lembrando que cada modelo tem uma "configuração ótima" por fold externo).
+    Seleciona todos os melhores modelos em geral (1 de cada tipo) no fold informado.
+    '''
+    best_models_of_fold = []
+    for model_name in results.keys():
+        best_model = clone(results[model_name]['melhores_modelos'][fold])
+        best_model.set_params(**results[model_name]['melhores_parametros'][fold])
+        best_models_of_fold.append((f"{model_name} #{fold+1}", best_model))
+    return best_models_of_fold
+
+
+def extract_all_best_models(results):
+    '''
+    Seleciona os melhores modelos (de qualquer tipo) com seus parâmetros, sendo um para cada fold externo.
+    Para cada fold externo, analisa o melhor de cada tipo de modelo (o melhor KNN, o melhor MLP, etc),  
+    usando o f1-score e separa o melhor deles (que pode ser de qualquer tipo).
+    Retorna a lista de modelos separados.
     '''
     best_models_per_fold = []
     for fold in range(5):
@@ -54,29 +68,32 @@ def select_best_models_per_fold(results):
     return best_models_per_fold
 
 
-def select_best_models_of_type_fn(model_name):
-    def _select_models(results):
-        return [ (f"{model_name} #{fold}", clone(model)) for fold, model in enumerate(results[model_name]['melhores_modelos']) ]
-    return _select_models
+def extract_best_models_of_type(results, model_name):
+    '''
+    Seleciona todas as configurações (hiperparametrizações) de um mesmo tipo de modelo, 
+    sendo uma configuração para cada fold externo (onde ela foi a melhor configuração).
+    '''
+    return [ (f"{model_name} #{fold}", clone(model)) for fold, model in enumerate(results[model_name]['melhores_modelos']) ]
 
 
-def train_ensemble(select_models_fn, results, X, y, name_prefix="ensemble"):
-    model_list = select_models_fn(results)
-    
+
+def train_ensemble(model_list, X, y, name_prefix, cv_outer):  
     _estimador_hard = MyVotingClassifier(estimators=model_list, voting='hard')
     _estimador_soft = MyVotingClassifier(estimators=model_list, voting='soft') 
 
-    new_results = { } #deepcopy(results)
+    new_results = { }
     
     # Executando a validação cruzada
     for name, estimador in [(name_prefix+'-hard-vote', _estimador_hard), (name_prefix+'-soft-vote', _estimador_soft)]:
         accuracy_list = []
         precision_list = []
         recall_list = []
-        f1_score_list = []        
+        f1_score_list = []
+        auc_score_list = []
+        aucpr_score_list = []
 
         # A mesma CV usada no treinamento de cada modelo
-        cv_outer = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        #cv_outer = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
         for train_ix, test_ix in cv_outer.split(X, y):
             print(".", end="")
@@ -91,31 +108,48 @@ def train_ensemble(select_models_fn, results, X, y, name_prefix="ensemble"):
             y_pred = estimador.predict(X_test)
 
             accuracy = metrics.accuracy_score(y_test, y_pred)
-            precision = metrics.precision_score(y_test, y_pred)
+            precision = metrics.precision_score(y_test, y_pred) # TODO: conferir onde é usada!
             recall = metrics.recall_score(y_test, y_pred)
-            f1 = metrics.f1_score(y_test, y_pred)
-
-            accuracy = metrics.accuracy_score(y_test, y_pred)
-            precisions = metrics.precision_score(y_test, y_pred)
-            recalls = metrics.recall_score(y_test, y_pred)
             f1 = metrics.f1_score(y_test, y_pred)
 
             # Armazenando métricas deste fold
             accuracy_list.append(accuracy)
-            precision_list.append(precisions)
-            recall_list.append(recalls)
+            precision_list.append(precision)
+            recall_list.append(recall)
             f1_score_list.append(f1)
+
+            # Probabilidades da classe positiva
+            y_pred_proba = estimador.predict_proba(X_test)[:, 1]  
+            
+            # Calcula auc-ROC (area under the curve, for ROC curve)
+            auc_score = metrics.roc_auc_score(y_test, y_pred_proba)
+            auc_score_list.append(auc_score)
+
+            # Valores usados para plotar a curva ROC
+            fpr, tpr, thresholds = metrics.roc_curve(y_test, y_pred_proba)  # Calcula FPR (false positive rate) e TPR (true positive rate)
+            roc_fpr_list.append(fpr)
+            roc_tpr_list.append(tpr)
+
+            # Calcula auc-PR (area under the curve, for PR curve)
+            # https://datascience.stackexchange.com/questions/9003/when-do-i-have-to-use-aucpr-instead-of-auroc-and-vice-versa
+            aucpr_score = metrics.average_precision_score(y_test, y_pred_proba) 
+            aucpr_score_list.append(aucpr_score)
+
+            # Valores usados para plotar para a curva PR
+            precisions, recalls, thresholds = metrics.precision_recall_curve(y_test, y_pred_proba)  # Calcula Precision e Recall
+            pr_precision_list.append(precisions)
+            pr_recall_list.append(recalls)
         
         new_results[name] = {
-            "Acurácia_mean": np.mean(accuracy_list),
-            "Acurácia_std": np.std(accuracy_list),
-            "Precisão_mean": np.mean(precision_list),
-            "Precisão_std": np.std(precision_list),
-            "Revocação_mean": np.mean(recall_list),
-            "Revocação_std": np.std(recall_list),
-            "F1_score_mean": np.mean(f1_score_list),
-            "F1_score_std": np.std(f1_score_list),
-            "F1_score_list": f1_score_list,
+            "accuracy_mean": np.mean(accuracy_list),
+            "accuracy_std": np.std(accuracy_list),
+            "precision_mean": np.mean(precision_list),
+            "precision_std": np.std(precision_list),
+            "recall_mean": np.mean(recall_list),
+            "recall_std": np.std(recall_list),
+            "f1_score_mean": np.mean(f1_score_list),
+            "f1_score_std": np.std(f1_score_list),
+            "f1_score_list": f1_score_list,
             "melhores_modelos": " + ".join([name for name, model in model_list])  # só a lista de nomes
         }
     
