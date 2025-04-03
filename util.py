@@ -3,13 +3,21 @@
 import numpy as np
 
 
-def filter_dataset(dfx, dfy, subdataset, target_col):
+def filter_dataset(dfx, dfy, metadata):
+    '''
+    Função para permitir carregar os dados no treinamento e no teste da mesma forma.
+    Usa os metadados para filtrar o dataset, remover colunas e selecionar o atributo de saída (alvo).
+    '''
+    subdataset = metadata['subdataset']
+    target_col = metadata['target']
+    columns_to_drop = metadata['dropped_features']
+
     assert subdataset in ['geral', 'lula', 'bolsonaro']
 
     if subdataset == 'geral':
         # pode remover uma das colunas de candidato, porque é redundante 
-        #dfx.drop(columns=['Candidato_Bolsonaro'], inplace=True)
         # PORÉM, não estou removendo!
+        #dfx.drop(columns=['Candidato_Bolsonaro'], inplace=True)
         print('Dataset GERAL!')
 
     else:
@@ -21,6 +29,8 @@ def filter_dataset(dfx, dfy, subdataset, target_col):
 
         dfy = dfy[candidate_filter]
         print('Dataset', subdataset.upper(), f'(indicador {lula_indicator})')
+
+    dfx = dfx.drop(columns=columns_to_drop)
     
     return dfx, dfy[target_col]
 

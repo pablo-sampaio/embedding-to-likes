@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, clone
 #from sklearn.model_selection import StratifiedKFold
 
-from classification_train_util import CVEvaluationResults
+from classification_util import ClassificationReport
 
 
 class MyVotingClassifier(BaseEstimator):
@@ -101,7 +101,7 @@ def train_ensemble(name_prefix, model_list, X, y, cv_outer):
     # Iterate over both hard and soft voting classifiers
     for name, estimador in [(name_prefix + '-hard-vote', _estimador_hard), (name_prefix + '-soft-vote', _estimador_soft)]:
         # Calculates and stores the results for this ensemble model
-        model_results = CVEvaluationResults(cv_outer, include_roc_curve=True, include_pr_curve=True)
+        model_results = ClassificationReport(include_roc_curve=True, include_pr_curve=True)
 
         # Perform cross-validation
         for train_ix, test_ix in cv_outer.split(X, y):
