@@ -4,6 +4,7 @@ import time
 import numpy as np
 import matplotlib.pyplot as plt
 
+from sklearn.base import BaseEstimator
 from sklearn.model_selection import GridSearchCV, StratifiedKFold, RepeatedStratifiedKFold
 from sklearn import metrics
 
@@ -328,8 +329,6 @@ def plot_pr_curve(resultados_gerais, model_name, fold, figsize=(10, 8), show_plo
         plt.show()
 
 
-from sklearn.base import BaseEstimator
-
 class RandomClassifier(BaseEstimator):
     def __init__(self, true_class_prob=0.5):
         self.class1_prob = true_class_prob
@@ -346,6 +345,7 @@ class RandomClassifier(BaseEstimator):
         y_pred_proba[:, 0] = 1.0 - self.class1_prob
         y_pred_proba[:, 1] = self.class1_prob
         return y_pred_proba
+
 
 def random_classifier_results(y_true, classifier_true_prob=0.5, trials=100):
     """
@@ -366,3 +366,46 @@ def random_classifier_results(y_true, classifier_true_prob=0.5, trials=100):
         report.evaluate_and_store_results(classifier, None, y_true, y_true, 0.0)
     
     return report.to_dict()
+
+
+from sklearn.base import ClassifierMixin
+
+# Não está sendo usado, no momento
+class ThresholdClassifier(BaseEstimator, ClassifierMixin):
+    def __init__(self, base_model, find_best_threshold=False):
+        self.base_model = base_model
+        self.threshold = 0.5 # Default threshold for binary classification
+        self.find_best_threshold = find_best_threshold
+    
+    def fit(self, X, y):
+        self.base_model.fit(X, y)
+        if self.find_best_threshold:
+            self.find_best_threshold(X, y)
+        return self
+    
+    def predict(self, X):
+        y_probs = self.base_model.predict_proba(X)[:, 1]
+        return (y_probs > self.threshold).astype(int)
+    
+    def predict_proba(self, X):
+        return self.base_model.predict_proba(X)
+    
+    def set_threshold(self, new_threshold):
+        """Update the decision threshold."""
+        self.threshold = new_threshold
+    
+    def find_best_threshold(self, X_val, y_val, thresholds=np.linspace(0.1, 0.9, 20)):
+        """Finds the threshold that maximizes the F1-score."""
+        y_probs = self.base_model.predict_proba(X_val)[:, 1]
+        best_threshold = self.threshold
+        best_f1 = 0
+        
+        for t in thresholds:
+            y_pred = (y_probs > t).astype(int)
+            f1 = metrics.f1_score(y_val, y_pred)
+            if f1 > best_f1:
+                best_f1 = f1
+                best_threshold = t
+        
+        self.threshold = best_threshold
+        return best_threshold, best_f1
