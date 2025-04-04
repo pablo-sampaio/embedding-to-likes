@@ -128,7 +128,7 @@ class ClassificationReport:
         return result
 
 
-def nested_cross_validation_grid_search(lista_modelos, X, y, cv_outer, cv_inner):
+def nested_cross_validation_grid_search(lista_modelos, X, y, cv_outer, cv_inner, n_jobs=1):
     """
     Esta função otimiza e treina vários modelos e avalia seu desempenho usando métricas como acurácia, 
     precisão, revocação e F1-score.
@@ -183,7 +183,7 @@ def nested_cross_validation_grid_search(lista_modelos, X, y, cv_outer, cv_inner)
                                        parametros, 
                                        scoring='f1', 
                                        cv=cv_inner,
-                                       n_jobs=1)
+                                       n_jobs=n_jobs)
             
             # Inicio do treinamento
             tempo_treinamento = time.time()
